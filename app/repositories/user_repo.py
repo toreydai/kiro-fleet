@@ -181,7 +181,11 @@ class SystemUserRepository:
 
     async def get_refresh_token(self, token: str) -> RefreshToken | None:
         token_hash = hashlib.sha256(token.encode()).hexdigest()
-        stmt = select(RefreshToken).where(RefreshToken.token_hash == token_hash)
+        stmt = (
+            select(RefreshToken)
+            .where(RefreshToken.token_hash == token_hash)
+            .with_for_update()
+        )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 

@@ -96,7 +96,7 @@ class IdentityCenterClient:
         url = f"https://identitystore.{self.sso_region}.amazonaws.com/identitystore/"
         payload = {
             "IdentityStoreId": self.identity_store_id,
-            "Filters": [{"AttributePath": "UserName", "AttributeValue": email}],
+            "Filters": [{"AttributePath": "Emails.Value", "AttributeValue": email}],
         }
         result = await self.client.sigv4_post(
             url=url,
@@ -129,7 +129,7 @@ class IdentityCenterClient:
             url=url,
             target="SWBUPService.UpdatePassword",
             payload=payload,
-            service="userpool",
+            service="identitystore",
             region=self.sso_region,
         )
         logger.info("Sent password reset email for user: %s", user_id)

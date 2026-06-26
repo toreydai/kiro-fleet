@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 
-from fastapi import APIRouter, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.api.deps import AdminUser, CurrentUser, SessionDep
@@ -128,7 +128,7 @@ async def list_tasks(
 
 
 @router.get("/provisioning/tasks/{task_id}", response_model=BatchTaskResponse)
-async def get_task(task_id: int, current_user: CurrentUser, session: SessionDep):
+async def get_task(task_id: int, admin: AdminUser, session: SessionDep):
     svc = ProvisioningService(session)
     return await svc.get_task(task_id)
 
@@ -139,11 +139,13 @@ async def export_task(
     task_id: int,
     admin: AdminUser,
     session: SessionDep,
+    background_tasks: BackgroundTasks,
 ):
     """导出批量任务结果为 kiro-account-manager JSON 文件."""
     svc = ProvisioningService(session)
     file_path = await svc.export_task_result(account_id, task_id)
     file_name = os.path.basename(file_path)
+    background_tasks.add_task(os.unlink, file_path)
     return FileResponse(
         path=file_path,
         filename=file_name,
@@ -156,6 +158,7 @@ async def export_account(
     account_id: int,
     admin: AdminUser,
     session: SessionDep,
+    background_tasks: BackgroundTasks,
 ):
     """导出整个账号的用户 JSON."""
     from app.services.token_export_service import TokenExportService
@@ -163,6 +166,7 @@ async def export_account(
     svc = TokenExportService(session)
     file_path = await svc.export_account_json(account_id)
     file_name = os.path.basename(file_path)
+    background_tasks.add_task(os.unlink, file_path)
     return FileResponse(
         path=file_path,
         filename=file_name,

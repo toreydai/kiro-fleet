@@ -58,6 +58,8 @@ class ProvisioningService:
         operator: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """一键批量开通 — 返回异步生成器，逐步 yield 进度事件."""
+        # 在返回生成器前校验账号，确保错误在 HTTP 200 发出前抛出
+        await self._require_account(account_id)
         return self._run_provision(account_id, plans, domain, prefix, operator)
 
     async def _run_provision(
@@ -68,7 +70,6 @@ class ProvisioningService:
         prefix: str,
         operator: str | None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        await self._require_account(account_id)
 
         # 计算总数
         total = sum(p["count"] for p in plans)
@@ -180,6 +181,7 @@ class ProvisioningService:
         operator: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """列表批量导入 — 返回异步生成器."""
+        await self._require_account(account_id)
         return self._run_batch_import(account_id, users_data, default_sub_type, operator)
 
     async def _run_batch_import(
@@ -189,7 +191,6 @@ class ProvisioningService:
         default_sub_type: str | None,
         operator: str | None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        await self._require_account(account_id)
         total = len(users_data)
 
         task = await self.task_repo.create(

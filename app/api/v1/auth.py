@@ -49,7 +49,7 @@ async def login(body: LoginRequest, session: SessionDep, _: None = Depends(limit
 
 
 @router.post("/login/mfa", response_model=TokenResponse)
-async def verify_mfa(body: MFAVerifyRequest, session: SessionDep):
+async def verify_mfa(body: MFAVerifyRequest, session: SessionDep, _: None = Depends(limit_login)):
     """MFA 第二步验证."""
     svc = AuthService(session)
     tokens = await svc.verify_mfa(body.pre_auth_token, body.totp_code)
@@ -97,7 +97,7 @@ async def setup_mfa(current_user: CurrentUser, session: SessionDep):
 @router.post("/mfa/enable", response_model=MessageResponse)
 async def enable_mfa(body: MFAEnableRequest, current_user: CurrentUser, session: SessionDep):
     svc = AuthService(session)
-    await svc.enable_mfa(current_user.id, body.totp_code)
+    await svc.enable_mfa(current_user.id, body.totp_code, body.secret)
     return MessageResponse(message="MFA 已启用")
 
 

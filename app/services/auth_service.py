@@ -113,22 +113,23 @@ class AuthService:
     # ── MFA 管理 ──────────────────────────────────────────────────────────
 
     async def setup_mfa(self, user_id: int) -> dict:
-        """生成 TOTP secret，不立即启用（需 enable_mfa 确认）."""
+        """生成 TOTP secret，不写库（防止攻击者覆盖已有 secret）。
+        客户端须将 secret 回传至 enable_mfa 完成确认后才正式保存。"""
         user = await self.repo.get_by_id(user_id)
         if not user:
             raise SystemUserNotFoundError(user_id)
         secret = generate_totp_secret()
-        await self.repo.update(user, totp_secret=secret)
         uri = get_totp_uri(secret, user.username)
         return {"secret": secret, "uri": uri}
 
-    async def enable_mfa(self, user_id: int, totp_code: str) -> None:
+    async def enable_mfa(self, user_id: int, totp_code: str, secret: str) -> None:
+        """验证 TOTP code 后才将 secret 持久化并启用 MFA."""
         user = await self.repo.get_by_id(user_id)
         if not user:
             raise SystemUserNotFoundError(user_id)
-        if not user.totp_secret or not verify_totp(user.totp_secret, totp_code):
+        if not verify_totp(secret, totp_code):
             raise MFACodeInvalidError("验证码无效，无法启用 MFA")
-        await self.repo.update(user, mfa_enabled=True)
+        await self.repo.update(user, mfa_enabled=True, totp_secret=secret)
 
     async def disable_mfa(self, user_id: int, totp_code: str) -> None:
         """禁用 MFA，需先验证当前 TOTP code."""

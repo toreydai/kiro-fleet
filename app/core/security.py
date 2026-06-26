@@ -9,6 +9,10 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+# v2 密钥派生参数：PBKDF2-HMAC-SHA256，固定应用盐，260000 次迭代
+_PBKDF2_SALT = b"kiro-fleet-v2-aes-key-salt"
+_PBKDF2_ITERATIONS = 260000
+
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -94,27 +98,35 @@ def decode_token(token: str, expected_type: str = "access") -> dict[str, Any]:
 # ── AES-256-GCM 加密 ──────────────────────────────────────────────────────
 
 
-def _derive_key() -> bytes:
-    """从 ENCRYPTION_KEY 派生 32 字节 AES 密钥."""
-    raw = get_settings().ENCRYPTION_KEY
-    # 用 SHA-256 统一派生，无论输入多长都输出 32 字节
+def _derive_key_legacy(raw: str) -> bytes:
+    """旧版单次 SHA-256 派生（仅用于解密历史数据）."""
     return hashlib.sha256(raw.encode()).digest()
 
 
+def _derive_key(raw: str) -> bytes:
+    """PBKDF2-HMAC-SHA256 派生 32 字节 AES 密钥（v2）."""
+    return hashlib.pbkdf2_hmac("sha256", raw.encode(), _PBKDF2_SALT, _PBKDF2_ITERATIONS)
+
+
 def encrypt(plaintext: str) -> str:
-    """AES-256-GCM 加密，返回 base64(nonce + ciphertext_with_tag)."""
-    key = _derive_key()
+    """AES-256-GCM 加密，返回 v2:<base64(nonce + ciphertext_with_tag)>."""
+    key = _derive_key(get_settings().ENCRYPTION_KEY)
     aesgcm = AESGCM(key)
     nonce = os.urandom(12)  # 96-bit nonce
     ct = aesgcm.encrypt(nonce, plaintext.encode(), None)
-    return base64.b64encode(nonce + ct).decode()
+    return "v2:" + base64.b64encode(nonce + ct).decode()
 
 
 def decrypt(ciphertext_b64: str) -> str:
-    """AES-256-GCM 解密."""
-    key = _derive_key()
+    """AES-256-GCM 解密。支持 v2: 前缀（PBKDF2）和旧版（SHA-256）两种格式."""
+    raw_key = get_settings().ENCRYPTION_KEY
+    if ciphertext_b64.startswith("v2:"):
+        key = _derive_key(raw_key)
+        raw = base64.b64decode(ciphertext_b64[3:])
+    else:
+        key = _derive_key_legacy(raw_key)
+        raw = base64.b64decode(ciphertext_b64)
     aesgcm = AESGCM(key)
-    raw = base64.b64decode(ciphertext_b64)
     nonce, ct = raw[:12], raw[12:]
     return aesgcm.decrypt(nonce, ct, None).decode()
 
@@ -126,7 +138,7 @@ def generate_totp_secret() -> str:
     return pyotp.random_base32()
 
 
-def verify_totp(secret: str, code: str) -> bool:
+def verify_totp(secret: str, code: str, last_used_counter: int | None = None) -> bool:
     """验证 TOTP code（允许 ±1 窗口）."""
     import pyotp
 
