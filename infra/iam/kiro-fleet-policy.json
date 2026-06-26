@@ -1,0 +1,39 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "IdentityCenterUserManagement",
+      "Effect": "Allow",
+      "Action": [
+        "identitystore:CreateUser",
+        "identitystore:DeleteUser",
+        "identitystore:DescribeUser",
+        "identitystore:ListUsers",
+        "identitystore:UpdateUser",
+        "identitystore:CreateGroupMembership",
+        "identitystore:DeleteGroupMembership",
+        "identitystore:ListGroups",
+        "identitystore:ListGroupMembershipsForMember",
+        "sso-directory:ListUsers"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "KiroSubscriptionManagement",
+      "Effect": "Allow",
+      "Action": [
+        "q:CreateAssignment",
+        "q:DeleteAssignment",
+        "q:UpdateAssignment",
+        "user-subscriptions:ListUserSubscriptions"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TrustedTokenIssuerExchange",
+      "Effect": "Allow",
+      "Action": "sso-oauth:CreateTokenWithIAM",
+      "Resource": "*"
+    }
+  ]
+}

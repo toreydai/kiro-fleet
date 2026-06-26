@@ -1,0 +1,269 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: kiro-fleet single-host deployment - private EC2 (SSM) behind public ALB, NAT egress
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Target VPC (e.g. the default VPC)
+  AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: AZ for the private subnet and NAT gateway; must match PublicSubnetA's AZ
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet hosting the NAT gateway and one ALB node; in AvailabilityZone
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet for the ALB's second AZ (different AZ from PublicSubnetA)
+  PrivateSubnetCidr:
+    Type: String
+    Description: Unused CIDR inside the VPC for the private app subnet
+    Default: 172.31.200.0/24
+  InstanceType:
+    Type: String
+    Default: t3.medium
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Resources:
+  # ---------- Private subnet + NAT egress ----------
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      CidrBlock: !Ref PrivateSubnetCidr
+      AvailabilityZone: !Ref AvailabilityZone
+      MapPublicIpOnLaunch: false
+      Tags:
+        - { Key: Name, Value: kiro-fleet-private }
+
+  NatEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - { Key: Name, Value: kiro-fleet-nat }
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - { Key: Name, Value: kiro-fleet-nat }
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcId
+      Tags:
+        - { Key: Name, Value: kiro-fleet-private-rt }
+
+  PrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnetAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet
+
+  # ---------- Security groups ----------
+  AlbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: kiro-fleet ALB - allow HTTP from internet
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP from internet
+      Tags:
+        - { Key: Name, Value: kiro-fleet-alb-sg }
+
+  InstanceSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: kiro-fleet instance - allow HTTP only from ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref AlbSg
+          Description: HTTP from ALB
+      Tags:
+        - { Key: Name, Value: kiro-fleet-instance-sg }
+
+  # ---------- IAM role for SSM + put admin password param ----------
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: put-kiro-fleet-params
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [ ssm:PutParameter ]
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/kiro-fleet/*
+              - Effect: Allow
+                Action: [ elasticloadbalancing:DescribeLoadBalancers ]
+                Resource: '*'
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [ !Ref InstanceRole ]
+
+  # ---------- EC2 instance (private) ----------
+  Instance:
+    Type: AWS::EC2::Instance
+    DependsOn: Alb
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref LatestAmiId
+      IamInstanceProfile: !Ref InstanceProfile
+      SubnetId: !Ref PrivateSubnet
+      SecurityGroupIds: [ !Ref InstanceSg ]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 60
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - { Key: Name, Value: kiro-fleet }
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -xeuo pipefail
+          exec > >(tee /var/log/kiro-bootstrap.log) 2>&1
+
+          dnf update -y
+          dnf install -y docker git
+          systemctl enable --now docker
+
+          # docker compose v2 plugin
+          mkdir -p /usr/libexec/docker/cli-plugins
+          curl -fsSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+            -o /usr/libexec/docker/cli-plugins/docker-compose
+          chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+
+          # buildx plugin (AL2023's bundled buildx is too old for compose build)
+          curl -fsSL https://github.com/docker/buildx/releases/download/v0.19.3/buildx-v0.19.3.linux-amd64 \
+            -o /usr/libexec/docker/cli-plugins/docker-buildx
+          chmod +x /usr/libexec/docker/cli-plugins/docker-buildx
+
+          cd /opt
+          git clone https://github.com/toreydai/kiro-fleet.git
+          cd /opt/kiro-fleet
+
+          # IMDSv2 token + region for metadata / AWS CLI calls
+          TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+          REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
+
+          # production config rejects wildcard CORS; discover this stack's ALB DNS
+          ALB_DNS=$(aws elbv2 describe-load-balancers --region "$REGION" \
+            --names kiro-fleet-alb --query 'LoadBalancers[0].DNSName' --output text)
+
+          gen() { openssl rand -hex 32; }
+          SECRET_KEY=$(gen)
+          ENCRYPTION_KEY=$(gen)
+          MYSQL_PASSWORD=$(openssl rand -hex 16)
+          MYSQL_ROOT_PASSWORD=$(openssl rand -hex 16)
+          ADMIN_PASSWORD="K$(openssl rand -base64 12 | tr -d '/+=')!9"
+
+          cat > /opt/kiro-fleet/.env <<EOF
+          SECRET_KEY=${SECRET_KEY}
+          ENCRYPTION_KEY=${ENCRYPTION_KEY}
+          ACCESS_TOKEN_EXPIRE_MINUTES=30
+          REFRESH_TOKEN_EXPIRE_DAYS=7
+          PRE_AUTH_TOKEN_EXPIRE_MINUTES=5
+          DB_TYPE=mysql
+          MYSQL_HOST=mysql
+          MYSQL_PORT=3306
+          MYSQL_USER=kiro
+          MYSQL_PASSWORD=${MYSQL_PASSWORD}
+          MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+          MYSQL_DATABASE=kiro_fleet
+          APP_ENV=production
+          LOG_LEVEL=INFO
+          CORS_ORIGINS=http://${ALB_DNS}
+          LOGIN_RATE_LIMIT_PER_MINUTE=10
+          DATA_DIR=./data
+          EXPORTS_DIR=./data/exports
+          SYNC_INTERVAL_MINUTES=10
+          PENDING_RETRY_INTERVAL_MINUTES=10
+          INITIAL_ADMIN_USERNAME=admin
+          INITIAL_ADMIN_PASSWORD=${ADMIN_PASSWORD}
+          INITIAL_ADMIN_EMAIL=admin@example.com
+          EOF
+          chmod 600 /opt/kiro-fleet/.env
+
+          # stash the generated admin password for the operator to retrieve
+          aws ssm put-parameter --region "$REGION" --name /kiro-fleet/initial-admin-password \
+            --type SecureString --overwrite --value "$ADMIN_PASSWORD" || true
+
+          ENV_FILE=/opt/kiro-fleet/.env docker compose --env-file /opt/kiro-fleet/.env \
+            -f /opt/kiro-fleet/deploy/docker-compose.yml up -d --build
+
+  # ---------- ALB ----------
+  Alb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: kiro-fleet-alb
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups: [ !Ref AlbSg ]
+      Subnets: [ !Ref PublicSubnetA, !Ref PublicSubnetB ]
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: kiro-fleet-tg
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 80
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /health
+      Matcher: { HttpCode: '200' }
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Targets:
+        - Id: !Ref Instance
+          Port: 80
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref Alb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  AlbUrl:
+    Value: !Sub http://${Alb.DNSName}
+  InstanceId:
+    Value: !Ref Instance
+  AdminPasswordParam:
+    Value: /kiro-fleet/initial-admin-password

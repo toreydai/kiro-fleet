@@ -1,0 +1,51 @@
+services:
+  mysql:
+    image: mysql:8.4
+    env_file: ${ENV_FILE:-../.env}
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-kiro_fleet}
+      MYSQL_USER: ${MYSQL_USER:-kiro}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    env_file: ${ENV_FILE:-../.env}
+    environment:
+      DB_TYPE: mysql
+      MYSQL_HOST: mysql
+    volumes:
+      - ../data:/app/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mysql_data:

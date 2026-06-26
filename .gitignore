@@ -1,0 +1,28 @@
+# 环境与密钥（绝不入库）
+.env
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv*/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# 数据库与数据
+data/
+backups/
+*.db
+*.sqlite3
+
+# 前端
+node_modules/
+dist/
+.vite/
+
+# 编辑器/系统
+.DS_Store
+.idea/
+.vscode/
