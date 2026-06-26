@@ -121,6 +121,21 @@ class IdentityCenterClient:
 
     # ── 密码 / 邮箱验证 ───────────────────────────────────────────────────
 
+    async def generate_one_time_password(self, user_id: str) -> str:
+        """生成一次性临时密码，返回明文密码（供管理员分发）."""
+        url = f"https://identitystore.{self.sso_region}.amazonaws.com/"
+        payload = {"UserId": user_id, "PasswordMode": "ONE_TIME_PASSWORD"}
+        resp = await self.client.sigv4_post(
+            url=url,
+            target="SWBUPService.UpdatePassword",
+            payload=payload,
+            service="identitystore",
+            region=self.sso_region,
+        )
+        password = (resp or {}).get("Password", "")
+        logger.info("Generated OTP for user: %s", user_id)
+        return password
+
     async def reset_password_by_email(self, user_id: str) -> None:
         """触发邮件重置密码."""
         url = f"https://identitystore.{self.sso_region}.amazonaws.com/"

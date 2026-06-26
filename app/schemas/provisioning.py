@@ -20,6 +20,7 @@ class QuickProvisionRequest(BaseModel):
     plans: list[ProvisionPlan] = Field(..., min_length=1, description="套餐-数量列表")
     domain: str = Field(..., description="邮箱域名，如 d-xxxxxxxx.awsapps.com")
     prefix: str = Field(..., min_length=1, max_length=32, description="用户名前缀")
+    group_id: str | None = Field(None, description="可选：将新用户加入指定 IDC Group 的 GroupId")
 
 
 class BatchUserImportItem(BaseModel):

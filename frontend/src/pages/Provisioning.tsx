@@ -40,6 +40,7 @@ interface UserResult {
   username: string
   email?: string
   plan?: string
+  password?: string
   status: 'success' | 'failed'
   error?: string
 }
@@ -49,15 +50,22 @@ type RunState = 'idle' | 'running' | 'done' | 'error'
 interface FormValues {
   prefix: string
   domain: string
+  group_id?: string
   power_count: number
   pro_max_count: number
   pro_plus_count: number
   pro_count: number
 }
 
+interface IcGroup {
+  GroupId: string
+  DisplayName: string
+}
+
 export default function Provisioning() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [selectedAccountId, setSelectedAccountId] = useState<number | undefined>(undefined)
+  const [groups, setGroups] = useState<IcGroup[]>([])
   const [form] = Form.useForm<FormValues>()
 
   const [runState, setRunState] = useState<RunState>('idle')
@@ -79,6 +87,16 @@ export default function Provisioning() {
     })
   }, [])
 
+  // 账号切换时重新拉 Group 列表
+  useEffect(() => {
+    if (!selectedAccountId) return
+    import('../lib/axios').then(({ default: api }) => {
+      api.get<{ groups: IcGroup[] }>(`/accounts/${selectedAccountId}/users/groups`)
+        .then((res) => setGroups(res.data.groups ?? []))
+        .catch(() => setGroups([]))
+    })
+  }, [selectedAccountId])
+
   // 新结果出现时自动滚动到底部
   useEffect(() => {
     if (listRef.current) {
@@ -92,7 +110,7 @@ export default function Provisioning() {
       return
     }
     const values = await form.validateFields()
-    const { prefix, domain, power_count, pro_max_count, pro_plus_count, pro_count } = values
+    const { prefix, domain, group_id, power_count, pro_max_count, pro_plus_count, pro_count } = values
 
     if (!power_count && !pro_max_count && !pro_plus_count && !pro_count) {
       void message.warning('请至少填写一种套餐的开通数量')
@@ -110,6 +128,7 @@ export default function Provisioning() {
     const payload = {
       prefix: prefix ?? 'kiro',
       domain: domain ?? '',
+      ...(group_id ? { group_id } : {}),
       plans: [
         ...(power_count
           ? [{ subscription_type: 'KIRO_ENTERPRISE_PRO_POWER', count: power_count }]
@@ -143,6 +162,7 @@ export default function Provisioning() {
                 username: event.username ?? '',
                 email: event.email,
                 plan: event.plan,
+                password: event.password,
                 status: 'success',
               },
             ])
@@ -227,7 +247,7 @@ export default function Provisioning() {
             <Form
               form={form}
               layout="vertical"
-              initialValues={{ prefix: 'kiro', domain: '', power_count: 0, pro_max_count: 0, pro_plus_count: 0, pro_count: 0 }}
+              initialValues={{ prefix: 'kiro', domain: '', group_id: undefined, power_count: 0, pro_max_count: 0, pro_plus_count: 0, pro_count: 0 }}
             >
               {/* 账号选择 */}
               <Form.Item label="目标 AWS 账号" required>
@@ -263,6 +283,22 @@ export default function Provisioning() {
                 extra="用于生成用户邮箱，如：example.com"
               >
                 <Input placeholder="如：example.com" />
+              </Form.Item>
+
+              {/* IDC Group */}
+              <Form.Item
+                name="group_id"
+                label="加入用户组（可选）"
+                extra="开通后自动将用户加入所选 IDC Group"
+              >
+                <Select
+                  allowClear
+                  placeholder="不指定用户组"
+                  options={groups.map((g) => ({
+                    value: g.GroupId,
+                    label: g.DisplayName,
+                  }))}
+                />
               </Form.Item>
 
               <Divider orientation="left" plain>套餐配置</Divider>
@@ -433,9 +469,17 @@ export default function Provisioning() {
                                 {item.error}
                               </Text>
                             ) : (
-                              <Text type="secondary" style={{ fontSize: 12 }}>
-                                {item.email ?? ''}
-                              </Text>
+                              <div style={{ fontSize: 12, lineHeight: '20px' }}>
+                                <div><Text type="secondary">{item.email ?? ''}</Text></div>
+                                {item.password && (
+                                  <div>
+                                    <Text type="secondary" style={{ marginRight: 4 }}>密码：</Text>
+                                    <Text copyable={{ text: item.password }} style={{ fontFamily: 'monospace' }}>
+                                      {item.password}
+                                    </Text>
+                                  </div>
+                                )}
+                              </div>
                             )
                           }
                         />

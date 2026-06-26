@@ -34,6 +34,7 @@ async def quick_provision(
         plans=plans,
         domain=body.domain,
         prefix=body.prefix,
+        group_id=body.group_id,
         operator=admin.username,
     )
 
