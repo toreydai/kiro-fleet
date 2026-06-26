@@ -48,6 +48,7 @@ type RunState = 'idle' | 'running' | 'done' | 'error'
 
 interface FormValues {
   prefix: string
+  domain: string
   power_count: number
   pro_max_count: number
   pro_plus_count: number
@@ -91,7 +92,7 @@ export default function Provisioning() {
       return
     }
     const values = await form.validateFields()
-    const { prefix, power_count, pro_max_count, pro_plus_count, pro_count } = values
+    const { prefix, domain, power_count, pro_max_count, pro_plus_count, pro_count } = values
 
     if (!power_count && !pro_max_count && !pro_plus_count && !pro_count) {
       void message.warning('请至少填写一种套餐的开通数量')
@@ -108,18 +109,19 @@ export default function Provisioning() {
 
     const payload = {
       prefix: prefix ?? 'kiro',
+      domain: domain ?? '',
       plans: [
         ...(power_count
-          ? [{ plan: 'KIRO_ENTERPRISE_PRO_POWER', count: power_count }]
+          ? [{ subscription_type: 'KIRO_ENTERPRISE_PRO_POWER', count: power_count }]
           : []),
         ...(pro_max_count
-          ? [{ plan: 'KIRO_ENTERPRISE_PRO_MAX', count: pro_max_count }]
+          ? [{ subscription_type: 'KIRO_ENTERPRISE_PRO_MAX', count: pro_max_count }]
           : []),
         ...(pro_plus_count
-          ? [{ plan: 'KIRO_ENTERPRISE_PRO_PLUS', count: pro_plus_count }]
+          ? [{ subscription_type: 'KIRO_ENTERPRISE_PRO_PLUS', count: pro_plus_count }]
           : []),
         ...(pro_count
-          ? [{ plan: 'KIRO_ENTERPRISE_PRO', count: pro_count }]
+          ? [{ subscription_type: 'KIRO_ENTERPRISE_PRO', count: pro_count }]
           : []),
       ],
     }
@@ -225,7 +227,7 @@ export default function Provisioning() {
             <Form
               form={form}
               layout="vertical"
-              initialValues={{ prefix: 'kiro', power_count: 0, pro_max_count: 0, pro_plus_count: 0, pro_count: 0 }}
+              initialValues={{ prefix: 'kiro', domain: '', power_count: 0, pro_max_count: 0, pro_plus_count: 0, pro_count: 0 }}
             >
               {/* 账号选择 */}
               <Form.Item label="目标 AWS 账号" required>
@@ -251,6 +253,16 @@ export default function Provisioning() {
                 extra="生成用户名格式：前缀_001, 前缀_002 …"
               >
                 <Input placeholder="如：kiro" maxLength={20} />
+              </Form.Item>
+
+              {/* 邮箱域名 */}
+              <Form.Item
+                name="domain"
+                label="邮箱域名"
+                rules={[{ required: true, message: '请输入邮箱域名' }]}
+                extra="用于生成用户邮箱，如：example.com"
+              >
+                <Input placeholder="如：example.com" />
               </Form.Item>
 
               <Divider orientation="left" plain>套餐配置</Divider>

@@ -132,7 +132,8 @@ class TestRefreshToken:
 
 
 class TestMFA:
-    async def test_mfa_setup_and_verify(self, client: AsyncClient, session: AsyncSession):
+    async def test_mfa_setup_does_not_persist_secret(self, client: AsyncClient, session: AsyncSession):
+        """setup_mfa 返回 secret 但不写库，重复调用不影响已有 secret."""
         username, password = await _create_admin(session)
         login_resp = await client.post(
             "/api/v1/auth/login",
@@ -141,26 +142,82 @@ class TestMFA:
         token = login_resp.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
 
-        # Setup MFA
+        r1 = await client.post("/api/v1/auth/mfa/setup", headers=headers)
+        r2 = await client.post("/api/v1/auth/mfa/setup", headers=headers)
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        # 每次调用返回不同 secret（未持久化）
+        assert r1.json()["secret"] != r2.json()["secret"]
+
+    async def test_mfa_setup_and_enable(self, client: AsyncClient, session: AsyncSession):
+        """enable_mfa 必须回传 setup_mfa 返回的 secret."""
+        username, password = await _create_admin(session)
+        login_resp = await client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": password},
+        )
+        token = login_resp.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
         setup_resp = await client.post("/api/v1/auth/mfa/setup", headers=headers)
         assert setup_resp.status_code == 200
         secret = setup_resp.json()["secret"]
 
-        # Enable MFA with valid TOTP
         import pyotp
-
-        totp = pyotp.TOTP(secret)
-        code = totp.now()
+        code = pyotp.TOTP(secret).now()
 
         enable_resp = await client.post(
             "/api/v1/auth/mfa/enable",
-            json={"totp_code": code},
+            json={"totp_code": code, "secret": secret},
             headers=headers,
         )
         assert enable_resp.status_code == 200
 
-    async def test_mfa_disable_requires_totp(self, client: AsyncClient, session: AsyncSession):
-        """禁用 MFA 必须提供当前 TOTP code."""
+    async def test_mfa_enable_wrong_secret_rejected(self, client: AsyncClient, session: AsyncSession):
+        """enable_mfa 传入非预期 secret 应被拒绝."""
+        username, password = await _create_admin(session)
+        login_resp = await client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": password},
+        )
+        token = login_resp.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        setup_resp = await client.post("/api/v1/auth/mfa/setup", headers=headers)
+        real_secret = setup_resp.json()["secret"]
+
+        import pyotp
+        attacker_secret = pyotp.random_base32()
+        code = pyotp.TOTP(attacker_secret).now()
+
+        enable_resp = await client.post(
+            "/api/v1/auth/mfa/enable",
+            json={"totp_code": code, "secret": real_secret},
+            headers=headers,
+        )
+        # 攻击者的 code 与真实 secret 不匹配，应失败
+        assert enable_resp.status_code in (400, 422)
+
+    async def test_mfa_enable_missing_secret_field_rejected(self, client: AsyncClient, session: AsyncSession):
+        """enable_mfa 不传 secret 字段应返回 422."""
+        username, password = await _create_admin(session)
+        login_resp = await client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": password},
+        )
+        token = login_resp.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        resp = await client.post(
+            "/api/v1/auth/mfa/enable",
+            json={"totp_code": "123456"},
+            headers=headers,
+        )
+        assert resp.status_code == 422
+
+    async def test_mfa_full_login_flow(self, client: AsyncClient, session: AsyncSession):
+        """启用 MFA 后登录需要两步."""
+        import pyotp
         username, password = await _create_admin(session)
         login_resp = await client.post(
             "/api/v1/auth/login",
@@ -171,15 +228,47 @@ class TestMFA:
 
         setup_resp = await client.post("/api/v1/auth/mfa/setup", headers=headers)
         secret = setup_resp.json()["secret"]
-
-        import pyotp
-
-        totp = pyotp.TOTP(secret)
-        code = totp.now()
-
+        code = pyotp.TOTP(secret).now()
         await client.post(
             "/api/v1/auth/mfa/enable",
-            json={"totp_code": code},
+            json={"totp_code": code, "secret": secret},
+            headers=headers,
+        )
+
+        # 第一步登录应返回 202 + pre_auth_token
+        step1 = await client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": password},
+        )
+        assert step1.status_code == 202
+        assert step1.json()["mfa_required"] is True
+        pre_auth_token = step1.json()["pre_auth_token"]
+
+        # 第二步验证 TOTP
+        step2 = await client.post(
+            "/api/v1/auth/login/mfa",
+            json={"pre_auth_token": pre_auth_token, "totp_code": pyotp.TOTP(secret).now()},
+        )
+        assert step2.status_code == 200
+        assert "access_token" in step2.json()
+
+    async def test_mfa_disable_requires_totp(self, client: AsyncClient, session: AsyncSession):
+        """禁用 MFA 必须提供当前 TOTP code."""
+        import pyotp
+        username, password = await _create_admin(session)
+        login_resp = await client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": password},
+        )
+        token = login_resp.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        setup_resp = await client.post("/api/v1/auth/mfa/setup", headers=headers)
+        secret = setup_resp.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+        await client.post(
+            "/api/v1/auth/mfa/enable",
+            json={"totp_code": code, "secret": secret},
             headers=headers,
         )
 

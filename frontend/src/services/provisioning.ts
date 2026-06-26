@@ -19,12 +19,13 @@ export interface ProvisioningStreamEvent {
 }
 
 export interface PlanItem {
-  plan: string
+  subscription_type: string
   count: number
 }
 
 export interface ProvisioningPayload {
   prefix: string
+  domain: string
   plans: PlanItem[]
 }
 
