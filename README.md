@@ -20,6 +20,15 @@
 
 `kiro-fleet` fork 自 [kiro-honcho](https://github.com/nwcd-samples/kiro-honcho) 并全面重构，在保留原有 Identity Center 和 Kiro 订阅核心逻辑的基础上新增了批量开通、任务历史、Credit 统计、账户 JSON 导出和完整的 Web UI，并将架构拆分为清晰的路由 / 业务 / 数据访问三层。
 
+相比 `kiro-honcho`，主要改进包括：
+
+1. **更清晰的工程架构**：后端拆分为 API、Service、Repository、AWS Client、Worker 和 Core 基础层，减少路由承载业务逻辑，统一 AWS 集成和数据访问边界。
+2. **更完整的批量开通流程**：支持按套餐数量、用户名列表或 CSV 批量创建用户并分配订阅，覆盖 Power / Pro Max / Pro+ / Pro 套餐、IDC Group 加入、一次性密码展示、SSE 实时进度和任务历史。
+3. **新增 Credit 与账户导出能力**：支持 Kiro Credit 用量查询/同步，并可通过 Trusted Token Issuer 生成 access token，导出 kiro-account-manager 标准账户 JSON。
+4. **订阅和用户管理增强**：保留原有多账号、用户、订阅、日志能力，并增强跨账号订阅总览、已取消订阅查询、批量改套餐、用户组和密码/邮箱操作。
+5. **安全与认证加固**：支持 MFA 两步登录、refresh token 轮换、登录限流、管理员边界保护和生产环境敏感配置校验。
+6. **部署、迁移和测试完善**：使用 Alembic 管理数据库 schema，提供 Docker Compose、CloudFormation、备份脚本、健康检查、指标接口和 pytest 自动化测试。
+
 ## 文档
 
 | 文档 | 内容 |
