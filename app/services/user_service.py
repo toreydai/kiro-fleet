@@ -75,7 +75,8 @@ class UserService:
         family_name: str | None = None,
         display_name: str | None = None,
         operator: str | None = None,
-    ):
+    ) -> tuple:
+        """创建 IC 用户，返回 (user, temp_password)。temp_password 为空字符串时表示获取失败。"""
         account = await self._require_account(account_id)
 
         # 检查用户名重复
@@ -115,6 +116,13 @@ class UserService:
             status="active",
         )
 
+        # 生成一次性密码，失败时静默降级（用户已创建，密码可后续手动重置）
+        temp_password = ""
+        try:
+            temp_password = await ic_client.generate_one_time_password(aws_user_id)
+        except Exception as pw_err:
+            logger.warning("Failed to generate OTP for %s: %s", user_name, pw_err)
+
         await self.log_svc.log(
             operation="create_user",
             status="success",
@@ -123,7 +131,7 @@ class UserService:
             message=f"创建 IC 用户 {user_name}",
             operator=operator,
         )
-        return user
+        return user, temp_password
 
     async def delete_user(self, account_id: int, user_id: int, operator: str | None = None) -> None:
         account = await self._require_account(account_id)

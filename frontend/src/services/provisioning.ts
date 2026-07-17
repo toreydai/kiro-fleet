@@ -11,21 +11,24 @@ export interface ProvisioningStreamEvent {
   username?: string
   email?: string
   plan?: string
+  password?: string
   error?: string
   // summary
-  task_id?: string
+  task_id?: string | number
   success_count?: number
-  fail_count?: number
+  failed_count?: number
 }
 
 export interface PlanItem {
-  plan: string
+  subscription_type: string
   count: number
 }
 
 export interface ProvisioningPayload {
   prefix: string
+  domain: string
   plans: PlanItem[]
+  group_id?: string
 }
 
 /**

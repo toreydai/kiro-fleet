@@ -84,7 +84,8 @@ class TokenExportService:
         file_name = f"{task_id or uuid.uuid4().hex}_{account_id}.json"
         file_path = os.path.join(settings.EXPORTS_DIR, file_name)
 
-        with open(file_path, "w", encoding="utf-8") as f:
+        fd = os.open(file_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(entries, f, ensure_ascii=False, indent=2)
 
         logger.info("Exported %d entries to %s", len(entries), file_path)
@@ -202,7 +203,7 @@ class TokenExportService:
             "iss": issuer,
             "sub": email,
             "email": email,
-            "aud": audience,
+            "aud": [audience],
             "iat": now,
             "exp": now + 3600,
             "jti": uuid.uuid4().hex,

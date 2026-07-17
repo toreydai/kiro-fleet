@@ -1,4 +1,64 @@
-# Kiro Fleet 架构与关键决策
+# 架构文档
+
+> Kiro Fleet 架构与关键决策
+
+## 目标
+
+验证多 AWS 账号下的 IAM Identity Center 用户与 Kiro 订阅能否在单机部署的管控平台上，安全、可审计地完成批量开通、订阅变更、Credit 统计和账户 JSON 导出全流程。
+
+## 组件
+
+- **Nginx frontend**：托管 React + Vite 静态资源，反向代理 `/api` 到后端
+- **FastAPI backend**：按 API / services / repositories / aws / workers / core 分层
+- **MySQL 8.4**：Compose 内置的默认持久化存储；SQLite 仅用于隔离测试或轻量开发
+- **目标 AWS 账号（多个）**：IAM Identity Center（用户、用户组、Trusted Token Issuer）与 Kiro 订阅 API
+- **部署形态**：单机 Docker Compose（默认）或 CloudFormation 一键基础设施（私有 EC2 + ALB + SSM）
+
+## 架构图
+
+```mermaid
+flowchart LR
+  subgraph Client["浏览器"]
+    Admin["管理员 / 系统用户"]
+  end
+
+  subgraph Compose["单机 Docker Compose 部署"]
+    subgraph FE["Nginx frontend"]
+      React["React + Vite 静态资源"]
+      Proxy["/api → FastAPI"]
+    end
+
+    subgraph BE["FastAPI backend"]
+      API["app/api/v1\n路由 · 认证 · SSE"]
+      SVC["app/services\n业务编排"]
+      REPO["app/repositories\n数据访问"]
+      AWSC["app/aws\n唯一异步 AWS 客户端"]
+      WRK["app/workers\nAPScheduler 同步/重试"]
+    end
+
+    MySQL[("MySQL 8.4")]
+  end
+
+  subgraph AWSCloud["目标 AWS 账号（多账号）"]
+    IC["IAM Identity Center\n用户 / 用户组 / Trusted Token Issuer"]
+    KiroAPI["Kiro 订阅 API\n套餐 / Credit"]
+  end
+
+  Admin -->|HTTPS| React
+  React --> Proxy
+  Proxy --> API
+  API --> SVC
+  SVC --> REPO
+  SVC --> AWSC
+  REPO --> MySQL
+  WRK --> SVC
+  AWSC -->|SigV4，加密凭证解密后调用| IC
+  AWSC -->|SigV4，加密凭证解密后调用| KiroAPI
+```
+
+浏览器访问 Nginx frontend 获取管理界面静态资源，`/api` 请求被反代到 FastAPI backend。backend 的 services 层编排业务逻辑，通过 repositories 读写 MySQL，通过 aws 层唯一的异步 AWS 客户端调用目标账号的 IAM Identity Center 和 Kiro 订阅 API；AWS 访问密钥以 AES-256-GCM 加密存储，仅在调用时解密，同步 boto3 调用被包装为线程任务，SigV4 请求使用 `httpx.AsyncClient`。workers 中的 APScheduler 负责账号、用户、订阅和 Credit 用量的定时同步与失败重试。
+
+---
 
 ## 定位与迁移边界
 
@@ -49,25 +109,25 @@ kiro-fleet/
 │   ├── api/
 │   │   ├── deps.py             # session、当前用户、管理员依赖
 │   │   └── v1/                 # auth、accounts、users、subscriptions 等 HTTP 路由
-│   ├── services/               # 业务编排与事务边界
-│   ├── repositories/           # SQLAlchemy 查询与写入封装
-│   ├── aws/                    # AsyncAWSClient、Identity Center、Kiro API
-│   ├── workers/                # APScheduler、同步、订阅重试任务
-│   ├── models/                 # SQLAlchemy ORM：账号、用户、订阅、日志、任务
-│   ├── schemas/                # Pydantic 请求/响应 DTO
-│   └── core/                   # config、db、security、exceptions、logging、metrics、限流
-├── alembic/                    # schema 迁移环境与版本文件
-├── frontend/                   # React + Vite + Ant Design 管理界面
+│   ├── services/                # 业务编排与事务边界
+│   ├── repositories/            # SQLAlchemy 查询与写入封装
+│   ├── aws/                     # AsyncAWSClient、Identity Center、Kiro API
+│   ├── workers/                 # APScheduler、同步、订阅重试任务
+│   ├── models/                  # SQLAlchemy ORM：账号、用户、订阅、日志、任务
+│   ├── schemas/                 # Pydantic 请求/响应 DTO
+│   └── core/                    # config、db、security、exceptions、logging、metrics、限流
+├── alembic/                     # schema 迁移环境与版本文件
+├── frontend/                    # React + Vite + Ant Design 管理界面
 │   └── src/
-│       ├── pages/              # Login、Dashboard、Accounts、Provisioning 等页面
-│       ├── components/         # Layout、鉴权路由等公共 UI
-│       ├── services/           # Axios API 调用封装
-│       └── stores/             # Zustand 认证和界面状态
-├── deploy/                     # Compose、Dockerfile、Nginx 配置
-├── scripts/                    # 备份等可执行运维脚本
-├── infra/iam/                  # AWS 最小权限策略模板
-├── tests/                      # pytest 异步集成/服务测试
-└── docs/                       # 架构、部署、管理员、测试手册
+│       ├── pages/                # Login、Dashboard、Accounts、Provisioning 等页面
+│       ├── components/           # Layout、鉴权路由等公共 UI
+│       ├── services/             # Axios API 调用封装
+│       └── stores/               # Zustand 认证和界面状态
+├── deploy/                      # Compose、Dockerfile、Nginx 配置
+├── scripts/                     # 备份等可执行运维脚本
+├── infra/iam/                   # AWS 最小权限策略模板
+├── tests/                       # pytest 异步集成/服务测试
+└── docs/                        # 架构、部署、管理员、测试手册
 ```
 
 ### 依赖方向

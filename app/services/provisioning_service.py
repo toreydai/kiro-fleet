@@ -55,10 +55,13 @@ class ProvisioningService:
         plans: list[dict[str, Any]],
         domain: str,
         prefix: str,
+        group_id: str | None = None,
         operator: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """一键批量开通 — 返回异步生成器，逐步 yield 进度事件."""
-        return self._run_provision(account_id, plans, domain, prefix, operator)
+        # 在返回生成器前校验账号，确保错误在 HTTP 200 发出前抛出
+        await self._require_account(account_id)
+        return self._run_provision(account_id, plans, domain, prefix, group_id, operator)
 
     async def _run_provision(
         self,
@@ -66,9 +69,9 @@ class ProvisioningService:
         plans: list[dict[str, Any]],
         domain: str,
         prefix: str,
+        group_id: str | None,
         operator: str | None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        await self._require_account(account_id)
 
         # 计算总数
         total = sum(p["count"] for p in plans)
@@ -77,7 +80,7 @@ class ProvisioningService:
         task = await self.task_repo.create(
             aws_account_id=account_id,
             task_type="quick_provision",
-            params={"plans": plans, "domain": domain, "prefix": prefix},
+            params={"plans": plans, "domain": domain, "prefix": prefix, "group_id": group_id},
             status="running",
             total_count=total,
             started_at=datetime.now(timezone.utc),
@@ -98,17 +101,17 @@ class ProvisioningService:
 
                 for uname in usernames:
                     email = f"{uname}@{domain}"
-                    event: dict[str, Any] = {
+                    yield {
+                        "type": "progress",
                         "task_id": task.id,
                         "status": "running",
                         "progress": int((success + failed) / total * 100),
-                        "total_count": total,
+                        "total": total,
+                        "done": success + failed,
                         "success_count": success,
                         "failed_count": failed,
-                        "current_user": uname,
                         "message": f"正在创建用户 {uname}",
                     }
-                    yield event
 
                     try:
                         # 在独立 session 中执行（避免长事务）
@@ -119,7 +122,7 @@ class ProvisioningService:
                             user_svc = UserService(sub_session)
                             sub_svc = SubscriptionService(sub_session)
 
-                            new_user = await user_svc.create_user(
+                            new_user, temp_password = await user_svc.create_user(
                                 account_id=account_id,
                                 user_name=uname,
                                 email=email,
@@ -135,11 +138,35 @@ class ProvisioningService:
                             except Exception as sub_err:
                                 # 订阅失败写 pending，用户已创建
                                 logger.warning("Subscription failed for %s: %s", uname, sub_err)
+                            if group_id:
+                                try:
+                                    await user_svc.add_user_to_group(
+                                        account_id=account_id,
+                                        user_id=new_user.id,
+                                        group_id=group_id,
+                                        operator=operator,
+                                    )
+                                except Exception as grp_err:
+                                    logger.warning("Add to group failed for %s: %s", uname, grp_err)
                             await sub_session.commit()
                         success += 1
+                        yield {
+                            "type": "user_created",
+                            "username": uname,
+                            "email": email,
+                            "plan": sub_type,
+                            "password": temp_password,
+                        }
                     except Exception as e:
                         logger.error("Provision failed for user %s: %s", uname, e)
                         failed += 1
+                        yield {
+                            "type": "user_failed",
+                            "username": uname,
+                            "email": email,
+                            "plan": sub_type,
+                            "error": str(e),
+                        }
 
             status = "completed"
         except Exception as e:
@@ -162,13 +189,14 @@ class ProvisioningService:
             await fin_session.commit()
 
         yield {
+            "type": "summary",
             "task_id": task.id,
             "status": status,
             "progress": 100,
-            "total_count": total,
+            "total": total,
+            "done": total,
             "success_count": success,
             "failed_count": failed,
-            "current_user": None,
             "message": f"完成: 成功 {success} / 失败 {failed}",
         }
 
@@ -180,6 +208,7 @@ class ProvisioningService:
         operator: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """列表批量导入 — 返回异步生成器."""
+        await self._require_account(account_id)
         return self._run_batch_import(account_id, users_data, default_sub_type, operator)
 
     async def _run_batch_import(
@@ -189,7 +218,6 @@ class ProvisioningService:
         default_sub_type: str | None,
         operator: str | None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        await self._require_account(account_id)
         total = len(users_data)
 
         task = await self.task_repo.create(
@@ -265,10 +293,12 @@ class ProvisioningService:
             await fin_session.commit()
 
         yield {
+            "type": "summary",
             "task_id": task.id,
             "status": "completed",
             "progress": 100,
-            "total_count": total,
+            "total": total,
+            "done": total,
             "success_count": success,
             "failed_count": failed,
             "message": f"完成: 成功 {success} / 失败 {failed}",

@@ -45,6 +45,7 @@ class MFASetupResponse(BaseModel):
 
 class MFAEnableRequest(BaseModel):
     totp_code: str = Field(..., min_length=6, max_length=6)
+    secret: str = Field(..., description="setup_mfa 返回的 TOTP secret，启用时需回传以防止中间人覆盖")
 
 
 class MFADisableRequest(BaseModel):
