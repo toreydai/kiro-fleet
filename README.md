@@ -63,10 +63,15 @@ frontend/          React + Vite
 
 Compose 默认启动本地 MySQL；生产容器启动时会自动执行 `alembic upgrade head`。开发环境可显式设置 `DB_TYPE=sqlite` 使用轻量数据库。
 
-## 免责声明
-
-本项目仅供学习与技术参考，不构成生产部署方案。运行过程中会调用 AWS IAM Identity Center 和 Kiro 相关 API 并可能产生费用，请根据实际使用量评估成本。导出的账户 JSON 包含用户访问凭证，属于敏感数据，请妥善保管，切勿上传至不受控位置。作者不对因使用本项目产生的任何费用、数据泄露或其他损失承担责任。本项目与 Amazon Web Services 无官方关联，相关服务的可用性与定价以 AWS 官方文档为准。生产环境使用前请根据实际需求进行安全评估与调整。
-
 ## License
 
 MIT - see the [LICENSE](LICENSE) file for details.
+
+## 免责声明
+
+- 本项目仅供学习与技术参考，不构成生产部署方案。
+- 运行过程中会调用 AWS IAM Identity Center 和 Kiro 相关 API 并可能产生费用，请根据实际使用量评估成本。
+- 导出的账户 JSON 包含用户访问凭证，属于敏感数据，请妥善保管，切勿上传至不受控位置。
+- 作者不对因使用本项目产生的任何费用、数据泄露或其他损失承担责任。
+- 本项目与 Amazon Web Services 无官方关联，相关服务的可用性与定价以 AWS 官方文档为准。
+- 生产环境使用前请根据实际需求进行安全评估与调整。
