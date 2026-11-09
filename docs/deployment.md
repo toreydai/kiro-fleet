@@ -99,7 +99,9 @@ aws cloudformation deploy \
     VpcId=<vpc-id> \
     AvailabilityZone=<az，如 us-east-1a> \
     PublicSubnetA=<该 AZ 的公有子网，放 NAT 和一个 ALB 节点> \
-    PublicSubnetB=<另一 AZ 的公有子网，ALB 第二可用区>
+    PublicSubnetB=<另一 AZ 的公有子网，ALB 第二可用区> \
+    PublicDomainName=<解析到 ALB 的公网域名> \
+    TlsCertificateArn=<该域名在同区域的 ACM 证书 ARN>
 ```
 
 完成后取访问地址与自动生成的初始管理员密码：
@@ -116,7 +118,7 @@ UserData 在实例上随机生成 `SECRET_KEY`、`ENCRYPTION_KEY`、MySQL 密码
 - **buildx**：Amazon Linux 2023 自带的 buildx 过旧，Compose 构建会报 `requires buildx 0.17.0 or later`；UserData 显式安装 buildx v0.19.3 的 CLI 插件。
 - **CORS**：生产模式（`APP_ENV=production`）拒绝通配符 `CORS_ORIGINS=*`；UserData 启动时通过 `DescribeLoadBalancers` 发现本栈 ALB 的 DNS，并将 `CORS_ORIGINS` 设为该地址。
 
-> 当前未配置 HTTPS/TLS，ALB 仅监听 80 端口；公网暴露场景请自行在 ALB 上挂证书并改为 443 监听。
+部署前须准备 ACM 证书，并将 `PublicDomainName` 的 DNS 记录指向 ALB。模板在 443 端口终止 TLS，80 端口仅重定向到 HTTPS；访问地址使用配置的域名。更新已有栈时，也须传入上述两个参数。
 
 ### AWS 接入与导出配置
 

@@ -24,6 +24,14 @@ Parameters:
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+  PublicDomainName:
+    Type: String
+    Description: DNS hostname pointed at the ALB and covered by the ACM certificate
+    AllowedPattern: '[A-Za-z0-9.-]+'
+  TlsCertificateArn:
+    Type: String
+    Description: ARN of an ACM certificate in the same Region for PublicDomainName
+    AllowedPattern: 'arn:aws:acm:[a-z0-9-]+:[0-9]{12}:certificate/[0-9a-f-]+'
 
 Resources:
   # ---------- Private subnet + NAT egress ----------
@@ -83,7 +91,12 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
-          Description: HTTP from internet
+          Description: HTTP redirect to HTTPS
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS from internet
       Tags:
         - { Key: Name, Value: kiro-fleet-alb-sg }
 
@@ -149,9 +162,9 @@ Resources:
       Tags:
         - { Key: Name, Value: kiro-fleet }
       UserData:
-        Fn::Base64: |
+        Fn::Base64: !Sub |
           #!/bin/bash
-          set -xeuo pipefail
+          set -euo pipefail
           exec > >(tee /var/log/kiro-bootstrap.log) 2>&1
 
           dnf update -y
@@ -189,8 +202,8 @@ Resources:
           ADMIN_PASSWORD="K$(openssl rand -base64 12 | tr -d '/+=')!9"
 
           cat > /opt/kiro-fleet/.env <<EOF
-          SECRET_KEY=${SECRET_KEY}
-          ENCRYPTION_KEY=${ENCRYPTION_KEY}
+          SECRET_KEY=${!SECRET_KEY}
+          ENCRYPTION_KEY=${!ENCRYPTION_KEY}
           ACCESS_TOKEN_EXPIRE_MINUTES=30
           REFRESH_TOKEN_EXPIRE_DAYS=7
           PRE_AUTH_TOKEN_EXPIRE_MINUTES=5
@@ -198,19 +211,19 @@ Resources:
           MYSQL_HOST=mysql
           MYSQL_PORT=3306
           MYSQL_USER=kiro
-          MYSQL_PASSWORD=${MYSQL_PASSWORD}
-          MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+          MYSQL_PASSWORD=${!MYSQL_PASSWORD}
+          MYSQL_ROOT_PASSWORD=${!MYSQL_ROOT_PASSWORD}
           MYSQL_DATABASE=kiro_fleet
           APP_ENV=production
           LOG_LEVEL=INFO
-          CORS_ORIGINS=http://${ALB_DNS}
+          CORS_ORIGINS=https://${PublicDomainName}
           LOGIN_RATE_LIMIT_PER_MINUTE=10
           DATA_DIR=./data
           EXPORTS_DIR=./data/exports
           SYNC_INTERVAL_MINUTES=10
           PENDING_RETRY_INTERVAL_MINUTES=10
           INITIAL_ADMIN_USERNAME=admin
-          INITIAL_ADMIN_PASSWORD=${ADMIN_PASSWORD}
+          INITIAL_ADMIN_PASSWORD=${!ADMIN_PASSWORD}
           INITIAL_ADMIN_EMAIL=admin@example.com
           EOF
           chmod 600 /opt/kiro-fleet/.env
@@ -257,12 +270,27 @@ Resources:
       Port: 80
       Protocol: HTTP
       DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: '443'
+            StatusCode: HTTP_301
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref Alb
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref TlsCertificateArn
+      DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
 
 Outputs:
   AlbUrl:
-    Value: !Sub http://${Alb.DNSName}
+    Value: !Sub https://${PublicDomainName}
   InstanceId:
     Value: !Ref Instance
   AdminPasswordParam:
